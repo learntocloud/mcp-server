@@ -1,8 +1,15 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 from fastmcp import FastMCP
+from auth import TokenAuthMiddleware
+from registration import (
+    APIKeyRegistrationManager, 
+    RegistrationRequest, 
+    RegistrationResponse,
+    registration_manager
+)
 from tools import (
     register_multiplication_tool,
     register_temperature_converter_tool,
@@ -20,8 +27,9 @@ register_multiplication_tool(mcp)
 register_temperature_converter_tool(mcp)
 register_weather_tools(mcp)
 
-# Define custom middleware for CORS
+# Define custom middleware with authentication and CORS
 custom_middleware = [
+    Middleware(TokenAuthMiddleware),  # Authentication always enabled
     Middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -64,6 +72,57 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+# API Key Registration endpoint
+@app.post("/register", response_model=RegistrationResponse)
+async def register_for_api_key(request: RegistrationRequest):
+    """
+    Register for an API key to access the MCP server.
+    
+    Rate limited to prevent abuse:
+    - 5 registrations per email per 24 hours
+    - Duplicate emails are rejected
+    
+    Example:
+        curl -X POST https://your-server.com/register \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "email": "user@example.com",
+            "project_name": "My CTF Project",
+            "github_repo": "username/my-ctf-fork"
+          }'
+    """
+    try:
+        return await registration_manager.create_registration(request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Registration failed",
+                "message": "An unexpected error occurred. Please try again later."
+            }
+        )
+
+# Registration info endpoint
+@app.get("/register/info")
+async def registration_info():
+    """Get information about the registration process."""
+    return {
+        "description": "Get an API key to access the MCP server",
+        "rate_limit": "5 registrations per email per 24 hours",
+        "key_format": "sk_[32_character_hex]",
+        "usage_limit": "1000 requests per hour per key",
+        "required_fields": ["email", "project_name"],
+        "optional_fields": ["github_repo", "organization"],
+        "example": {
+            "email": "user@example.com",
+            "project_name": "My CTF Project",
+            "github_repo": "username/my-ctf-fork",
+            "organization": "My University"
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn
